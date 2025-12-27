@@ -94,6 +94,8 @@
     var maxIterations = 5000;
     var canvasWidth, canvasHeight;
     var kdRoot = null; // root of the k-d tree spatial index
+    var kdInsertsSinceRebuild = 0; // count inserts since last rebuild
+    var KD_REBUILD_INTERVAL = 200; // rebuild k-d tree every N inserts
     
     // Node: represents a single vertex in the RRT tree.
     // - x, y: grid coordinates of the node (integers)
@@ -161,6 +163,30 @@
 
       recurse(root);
       return best.node;
+    }
+
+    // Build a balanced k-d tree from an array of RRT Node objects.
+    // This does a median split at each recursion level and results in a
+    // reasonably balanced tree (O(n log n) build).
+    function buildKDFromArray(nodes, depth) {
+      if (!nodes || nodes.length === 0) return null;
+      var axis = depth % 2;
+      // sort copy by axis
+      var arr = nodes.slice();
+      arr.sort(function(a, b) {
+        return axis === 0 ? a.x - b.x : a.y - b.y;
+      });
+      var mid = Math.floor(arr.length / 2);
+      var root = new KDNode(arr[mid], axis);
+      root.left = buildKDFromArray(arr.slice(0, mid), depth + 1);
+      root.right = buildKDFromArray(arr.slice(mid + 1), depth + 1);
+      return root;
+    }
+
+    // Rebuild the kd-tree from the full `tree` array and reset the insert counter.
+    function rebuildKD() {
+      kdRoot = buildKDFromArray(tree.slice(), 0);
+      kdInsertsSinceRebuild = 0;
     }
 
     // Initialize the p5 canvas and compute grid size based on `cellSize`.
@@ -235,9 +261,9 @@
       maze[goal.y][goal.x] = 0;
       
       tree = [new Node(start.x, start.y)];
-      // initialize k-d tree with the root/start node
-      kdRoot = null;
-      kdRoot = kdInsert(kdRoot, tree[0], 0);
+      // initialize k-d tree with a balanced build from the current tree
+      kdInsertsSinceRebuild = 0;
+      rebuildKD();
       path = [];
       foundPath = false;
     }
@@ -316,6 +342,12 @@
         tree.push(newNode);
         // also insert the new node into the k-d tree for faster NN queries
         kdRoot = kdInsert(kdRoot, newNode, 0);
+        kdInsertsSinceRebuild++;
+        // Periodically rebuild the kd-tree into a balanced structure to
+        // avoid long-term degeneration from many incremental inserts.
+        if (kdInsertsSinceRebuild >= KD_REBUILD_INTERVAL) {
+          rebuildKD();
+        }
         
         var distToGoal = dist(newNode.x, newNode.y, goal.x, goal.y);
         if (distToGoal < 2) {
