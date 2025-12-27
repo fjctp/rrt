@@ -86,7 +86,7 @@
   <script>
     var maze = [];
     var cols, rows;
-    var cellSize = 15;
+    var cellSize = 5;
     var start, goal;
     var tree = [];
     var path = [];
@@ -179,15 +179,15 @@
       }
       
       fill(100, 200, 100);
-      circle(start.x * cellSize + cellSize/2, start.y * cellSize + cellSize/2, cellSize * 0.6);
+      circle(start.x * cellSize + cellSize/2, start.y * cellSize + cellSize/2, cellSize);
       
       fill(200, 100, 100);
-      circle(goal.x * cellSize + cellSize/2, goal.y * cellSize + cellSize/2, cellSize * 0.6);
+      circle(goal.x * cellSize + cellSize/2, goal.y * cellSize + cellSize/2, cellSize);
     }
 
     function drawTree() {
       stroke(150, 150, 255, 100);
-      strokeWeight(1);
+      strokeWeight(3);
       for (var i = 0; i < tree.length; i++) {
         var node = tree[i];
         if (node.parent) {
@@ -204,7 +204,7 @@
     function drawPath() {
       if (path.length > 1) {
         stroke(255, 100, 100);
-        strokeWeight(3);
+        strokeWeight(5);
         noFill();
         beginShape();
         for (var i = 0; i < path.length; i++) {
