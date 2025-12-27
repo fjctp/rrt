@@ -93,6 +93,7 @@
     var foundPath = false;
     var maxIterations = 5000;
     var canvasWidth, canvasHeight;
+    var kdRoot = null; // root of the k-d tree spatial index
     
     // Node: represents a single vertex in the RRT tree.
     // - x, y: grid coordinates of the node (integers)
@@ -105,6 +106,61 @@
         this.y = y;
         this.parent = parent || null;
       }
+    }
+
+    // Simple incremental k-d tree implementation for 2D points.
+    // We store references to the RRT `Node` objects inside KD nodes so
+    // that nearest-neighbor queries return the actual tree node (with parent link).
+    function KDNode(node, axis) {
+      this.node = node; // reference to RRT Node
+      this.left = null;
+      this.right = null;
+      this.axis = axis; // 0 => x, 1 => y
+    }
+
+    // Insert an RRT `Node` into the k-d tree. Returns the (possibly new) root.
+    function kdInsert(root, rrtNode, depth) {
+      if (!root) return new KDNode(rrtNode, depth % 2);
+      var axis = root.axis;
+      if ((axis === 0 && rrtNode.x < root.node.x) || (axis === 1 && rrtNode.y < root.node.y)) {
+        root.left = kdInsert(root.left, rrtNode, depth + 1);
+      } else {
+        root.right = kdInsert(root.right, rrtNode, depth + 1);
+      }
+      return root;
+    }
+
+    // Wrapper that returns the nearest RRT Node in the k-d tree to `point`.
+    function kdNearestSearch(root, point) {
+      if (!root) return null;
+      var best = { node: null, dist: Infinity };
+
+      function sqDist(a, b) {
+        var dx = a.x - b.x;
+        var dy = a.y - b.y;
+        return dx * dx + dy * dy;
+      }
+
+      function recurse(curr) {
+        if (!curr) return;
+        var d = sqDist(curr.node, point);
+        if (d < best.dist) {
+          best.node = curr.node;
+          best.dist = d;
+        }
+
+        var axis = curr.axis;
+        var diff = (axis === 0) ? (point.x - curr.node.x) : (point.y - curr.node.y);
+
+        var first = diff < 0 ? curr.left : curr.right;
+        var second = diff < 0 ? curr.right : curr.left;
+
+        recurse(first);
+        if (diff * diff < best.dist) recurse(second);
+      }
+
+      recurse(root);
+      return best.node;
     }
 
     // Initialize the p5 canvas and compute grid size based on `cellSize`.
@@ -179,6 +235,9 @@
       maze[goal.y][goal.x] = 0;
       
       tree = [new Node(start.x, start.y)];
+      // initialize k-d tree with the root/start node
+      kdRoot = null;
+      kdRoot = kdInsert(kdRoot, tree[0], 0);
       path = [];
       foundPath = false;
     }
@@ -255,6 +314,8 @@
       
       if (newNode && !collisionCheck(nearest, newNode)) {
         tree.push(newNode);
+        // also insert the new node into the k-d tree for faster NN queries
+        kdRoot = kdInsert(kdRoot, newNode, 0);
         
         var distToGoal = dist(newNode.x, newNode.y, goal.x, goal.y);
         if (distToGoal < 2) {
@@ -270,23 +331,27 @@
       }
     }
 
-    // Find the nearest node in `tree` to a given `point` using a linear scan.
-    // This is a brute-force nearest-neighbor search (O(n)) over all nodes in
-    // the tree. For small trees this is simple and fast; for larger trees one
-    // could use spatial structures (k-d tree, grid hashing, etc.) to speed up
-    // nearest-neighbor queries.
+    // Find the nearest node to `point` using the k-d tree for fast NN queries.
+    // The kd-tree is initialized in `generateMaze` and updated on each insert.
+    // If the k-d tree is missing or its search fails we fall back to the
+    // original brute-force linear scan over `tree` (guaranteed to return a node).
     function findNearest(point) {
+      if (kdRoot) {
+        var nearest = kdNearestSearch(kdRoot, point);
+        if (nearest) return nearest;
+      }
+
+      // Brute-force fallback: scan all nodes in `tree` and pick the closest.
       var minDist = Infinity;
-      var nearest = tree[0];
-      
+      var nearestLinear = tree[0];
       for (var i = 0; i < tree.length; i++) {
         var d = dist(tree[i].x, tree[i].y, point.x, point.y);
         if (d < minDist) {
           minDist = d;
-          nearest = tree[i];
+          nearestLinear = tree[i];
         }
       }
-      return nearest;
+      return nearestLinear;
     }
 
     // Move from node `from` towards point `to` by at most `maxStep` grid cells.
