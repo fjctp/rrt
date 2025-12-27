@@ -94,6 +94,11 @@
     var maxIterations = 5000;
     var canvasWidth, canvasHeight;
     
+    // Node: represents a single vertex in the RRT tree.
+    // - x, y: grid coordinates of the node (integers)
+    // - parent: reference to the parent Node from which this node was expanded
+    // The `parent` reference is used to reconstruct a path from any node
+    // back to the start by following parent links (used in `constructPath`).
     class Node {
       constructor(x, y, parent) {
         this.x = x;
@@ -102,6 +107,9 @@
       }
     }
 
+    // Initialize the p5 canvas and compute grid size based on `cellSize`.
+    // Sets the canvas parent element, frame rate, and disables automatic looping
+    // until the user generates a maze.
     function setup() {
       var container = document.getElementById('canvas-container');
       canvasWidth = min(windowWidth - 40, 600);
@@ -115,6 +123,8 @@
       noLoop();
     }
 
+    // Handle browser window resize: adjust canvas and recompute grid.
+    // If a maze already exists, regenerate and solve it with new dimensions.
     function windowResized() {
       canvasWidth = min(windowWidth - 40, 600);
       canvasHeight = min(windowHeight - 300, 500);
@@ -126,6 +136,9 @@
       }
     }
 
+    // Main draw loop (p5): renders the maze, the RRT tree, and the path.
+    // Also advances the RRT by a few steps per frame if a path has not
+    // yet been found and iteration limits are not exceeded.
     function draw() {
       background(240);
       
@@ -142,12 +155,15 @@
       }
     }
 
+    // UI entry point: generate a new maze and start the animation/solver.
     function generateAndSolve() {
       document.getElementById('status').textContent = 'Generating maze and finding path...';
       generateMaze();
       loop();
     }
 
+    // Create a random grid-based maze (0 = free, 1 = wall), pick start/goal,
+    // and reset the RRT tree and path state.
     function generateMaze() {
       maze = [];
       for (var i = 0; i < rows; i++) {
@@ -167,6 +183,7 @@
       foundPath = false;
     }
 
+    // Render the maze grid, the start point (green), and the goal (red).
     function drawMaze() {
       for (var i = 0; i < rows; i++) {
         for (var j = 0; j < cols; j++) {
@@ -185,6 +202,9 @@
       circle(goal.x * cellSize + cellSize/2, goal.y * cellSize + cellSize/2, cellSize);
     }
 
+    // Draw the RRT tree lines: for each node, draw a line to its parent.
+    // The `node.parent` property is a reference to the node from which this
+    // node was expanded. If `parent` is null the node is the root.
     function drawTree() {
       stroke(150, 150, 255, 100);
       strokeWeight(3);
@@ -201,6 +221,7 @@
       }
     }
 
+    // If a final path exists, draw it as a thicker colored line.
     function drawPath() {
       if (path.length > 1) {
         stroke(255, 100, 100);
@@ -214,6 +235,9 @@
       }
     }
 
+    // Perform one RRT iteration: sample a point, find the nearest tree node,
+    // attempt to steer from that node toward the sample, do collision checks,
+    // add the new node to the tree, and check if the goal is reached.
     function rrtStep() {
       if (foundPath) return;
       
@@ -246,6 +270,11 @@
       }
     }
 
+    // Find the nearest node in `tree` to a given `point` using a linear scan.
+    // This is a brute-force nearest-neighbor search (O(n)) over all nodes in
+    // the tree. For small trees this is simple and fast; for larger trees one
+    // could use spatial structures (k-d tree, grid hashing, etc.) to speed up
+    // nearest-neighbor queries.
     function findNearest(point) {
       var minDist = Infinity;
       var nearest = tree[0];
@@ -260,6 +289,8 @@
       return nearest;
     }
 
+    // Move from node `from` towards point `to` by at most `maxStep` grid cells.
+    // Returns a new Node positioned one step toward `to` with `from` as parent.
     function steer(from, to) {
       var maxStep = 1;
       var dx = to.x - from.x;
@@ -280,6 +311,9 @@
       return null;
     }
 
+    // Check the discrete line from `from` to `to` for walls. Returns true if
+    // a collision (wall) is found. Uses simple integer stepping and checks
+    // each visited grid cell for occupancy.
     function collisionCheck(from, to) {
       if (maze[to.y][to.x] === 1) return true;
       
@@ -293,6 +327,8 @@
       return false;
     }
 
+    // Construct the path by following `parent` links from `endNode` back to
+    // the root/start node. The path array will contain nodes from start->goal.
     function constructPath(endNode) {
       path = [];
       var current = endNode;
