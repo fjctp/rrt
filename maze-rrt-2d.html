@@ -70,6 +70,7 @@
     <h1>Maze Runner with RRT Path Planning</h1>
     <div class="info">Green = Start | Red = Goal | Blue lines = RRT exploration</div>
     <button onclick="generateAndSolve()">Generate & Solve</button>
+    <button onclick="resetView()">Reset View</button>
     <div id="status">Click "Generate & Solve" to start</div>
     <div id="canvas-container"></div>
     <div class="instructions">
@@ -96,6 +97,15 @@
     var kdRoot = null; // root of the k-d tree spatial index
     var kdInsertsSinceRebuild = 0; // count inserts since last rebuild
     var KD_REBUILD_INTERVAL = 200; // rebuild k-d tree every N inserts
+    // View transform state for zoom & pan (used only for rendering)
+    var viewScale = 1.0;
+    var viewTranslateX = 0;
+    var viewTranslateY = 0;
+    var minViewScale = 0.2;
+    var maxViewScale = 20;
+    var isPanning = false;
+    var panStartX = 0;
+    var panStartY = 0;
     
     // Node: represents a single vertex in the RRT tree.
     // - x, y: grid coordinates of the node (integers)
@@ -261,16 +271,24 @@
     // yet been found and iteration limits are not exceeded.
     function draw() {
       background(240);
-      
+
+      // Apply view transform (pan & zoom) for rendering only.
+      push();
+      translate(viewTranslateX, viewTranslateY);
+      scale(viewScale);
+
       if (maze.length > 0) {
         drawMaze();
         drawTree();
         drawPath();
-        
-        if (!foundPath && tree.length > 0 && tree.length < maxIterations) {
-          for (var i = 0; i < 5; i++) {
-            rrtStep();
-          }
+      }
+
+      pop();
+
+      // Advance algorithm after rendering (keeps panning/zoom responsive)
+      if (maze.length > 0 && !foundPath && tree.length > 0 && tree.length < maxIterations) {
+        for (var i = 0; i < 5; i++) {
+          rrtStep();
         }
       }
     }
@@ -331,6 +349,54 @@
       
       fill(200, 100, 100);
       circle(goal.x * cellSize + cellSize/2, goal.y * cellSize + cellSize/2, cellSize);
+    }
+
+    // p5 mouseWheel handler for zooming centered on mouse position.
+    function mouseWheel(event) {
+      // calculate world coordinates under mouse before zoom
+      var oldScale = viewScale;
+      var wx = (mouseX - viewTranslateX) / oldScale;
+      var wy = (mouseY - viewTranslateY) / oldScale;
+
+      // zoom factor - adjust sensitivity here
+      var zoomFactor = 1 - event.deltaY * 0.001;
+      if (zoomFactor <= 0) zoomFactor = 1;
+      viewScale *= zoomFactor;
+      viewScale = constrain(viewScale, minViewScale, maxViewScale);
+
+      // adjust translate to keep the world point under the mouse stationary
+      viewTranslateX = mouseX - wx * viewScale;
+      viewTranslateY = mouseY - wy * viewScale;
+
+      // prevent page from scrolling
+      return false;
+    }
+
+    function mousePressed() {
+      // start panning with left mouse button
+      if (mouseButton === LEFT) {
+        isPanning = true;
+        panStartX = mouseX - viewTranslateX;
+        panStartY = mouseY - viewTranslateY;
+      }
+    }
+
+    function mouseDragged() {
+      if (isPanning) {
+        viewTranslateX = mouseX - panStartX;
+        viewTranslateY = mouseY - panStartY;
+      }
+    }
+
+    function mouseReleased() {
+      isPanning = false;
+    }
+
+    // Reset view to default (no pan, scale = 1)
+    function resetView() {
+      viewScale = 1.0;
+      viewTranslateX = 0;
+      viewTranslateY = 0;
     }
 
     // Draw the RRT tree lines: for each node, draw a line to its parent.
