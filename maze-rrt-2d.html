@@ -670,82 +670,14 @@
     // visit every grid cell the straight line passes through — this is more
     // robust than floating rounding (avoids skipping corner cells on diagonals).
     function collisionCheck(from, to) {
-      var x0 = from.x;
-      var y0 = from.y;
-      var x1 = to.x;
-      var y1 = to.y;
+      if (maze[to.y][to.x] === 1) return true;
 
-      // record visited cells if debug enabled
-      var visited = [];
-
-      // check endpoints first (safety)
-      if (!maze[y1] || maze[y1][x1] === 1) {
-        if (debugCollision) {
-          visited.push({ x: x1, y: y1 });
-          lastCollisionTests.push({ from: { x: from.x, y: from.y }, to: { x: to.x, y: to.y }, cells: visited.slice(), result: true });
-        }
-        return true;
-      }
-      if (!maze[y0] || maze[y0][x0] === 1) {
-        if (debugCollision) {
-          visited.push({ x: x0, y: y0 });
-          lastCollisionTests.push({ from: { x: from.x, y: from.y }, to: { x: to.x, y: to.y }, cells: visited.slice(), result: true });
-        }
-        return true;
-      }
-
-      var dx = Math.abs(x1 - x0);
-      var sx = x0 < x1 ? 1 : -1;
-      var dy = -Math.abs(y1 - y0);
-      var sy = y0 < y1 ? 1 : -1;
-      var err = dx + dy; // err = dx - abs(dy)
-
-      while (true) {
-        // check current cell
-        if (debugCollision) visited.push({ x: x0, y: y0 });
-        if (!maze[y0] || maze[y0][x0] === 1) {
-          if (debugCollision) lastCollisionTests.push({ from: { x: from.x, y: from.y }, to: { x: to.x, y: to.y }, cells: visited.slice(), result: true });
-          return true;
-        }
-        if (x0 === x1 && y0 === y1) break;
-        var e2 = 2 * err;
-        var moveX = false;
-        var moveY = false;
-        if (e2 >= dy) {
-          err += dy;
-          moveX = true;
-        }
-        if (e2 <= dx) {
-          err += dx;
-          moveY = true;
-        }
-
-        var nx = x0 + (moveX ? sx : 0);
-        var ny = y0 + (moveY ? sy : 0);
-
-        // detect corner-cutting: if movement is diagonal and both adjacent
-        // orthogonal cells are walls, then the line attempts to pass through
-        // the corner between them — treat that as a collision.
-        if (moveX && moveY) {
-          var cell1 = (maze[y0] && maze[y0][nx]) ? maze[y0][nx] : 1;
-          var cell2 = (maze[ny] && maze[ny][x0]) ? maze[ny][x0] : 1;
-          if (cell1 === 1 && cell2 === 1) {
-            if (debugCollision) {
-              // include the corner-adjacent cells for debugging
-              visited.push({ x: nx, y: y0 });
-              visited.push({ x: x0, y: ny });
-              lastCollisionTests.push({ from: { x: from.x, y: from.y }, to: { x: to.x, y: to.y }, cells: visited.slice(), result: true });
-            }
-            return true;
-          }
-        }
-
-        x0 = nx;
-        y0 = ny;
-      }
-
-      if (debugCollision) {
-        lastCollisionTests.push({ from: { x: from.x, y: from.y }, to: { x: to.x, y: to.y }, cells: visited.slice(), result: false });
+      var steps = max(abs(to.x - from.x), abs(to.y - from.y));
+      for (var i = 0; i <= steps; i++) {
+        var t = steps === 0 ? 0 : i / steps;
+        var x = round(from.x + (to.x - from.x) * t);
+        var y = round(from.y + (to.y - from.y) * t);
+        if (maze[y][x] === 1) return true;
       }
       return false;
     }
