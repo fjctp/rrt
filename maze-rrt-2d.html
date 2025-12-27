@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Maze Runner with RRT</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
+  <style>
+    body {
+      margin: 0;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      background-color: #f5f5f5;
+      font-family: Arial, sans-serif;
+    }
+    .container {
+      background: white;
+      padding: 15px;
+      border-radius: 10px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+      max-width: 100%;
+      box-sizing: border-box;
+    }
+    h1 {
+      margin: 0 0 10px 0;
+      color: #333;
+      font-size: 20px;
+    }
+    .info {
+      margin: 10px 0;
+      color: #666;
+      font-size: 12px;
+    }
+    button {
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      font-size: 14px;
+      border-radius: 5px;
+      cursor: pointer;
+      margin: 10px 0;
+      width: 100%;
+      max-width: 300px;
+    }
+    button:hover {
+      background-color: #45a049;
+    }
+    #status {
+      font-weight: bold;
+      color: #333;
+      margin: 10px 0;
+      font-size: 13px;
+    }
+    .instructions {
+      margin-top: 15px;
+      font-size: 12px;
+      color: #555;
+    }
+    .instructions ul {
+      margin: 5px 0;
+      padding-left: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Maze Runner with RRT Path Planning</h1>
+    <div class="info">Green = Start | Red = Goal | Blue lines = RRT exploration</div>
+    <button onclick="generateAndSolve()">Generate & Solve</button>
+    <div id="status">Click "Generate & Solve" to start</div>
+    <div id="canvas-container"></div>
+    <div class="instructions">
+      <strong>How RRT works:</strong>
+      <ul>
+        <li>Randomly samples points in the maze</li>
+        <li>Grows a tree from start toward sampled points</li>
+        <li>Avoids obstacles (black walls)</li>
+        <li>Connects to goal when close enough</li>
+      </ul>
+    </div>
+  </div>
+
+  <script>
+    var maze = [];
+    var cols, rows;
+    var cellSize = 15;
+    var start, goal;
+    var tree = [];
+    var path = [];
+    var foundPath = false;
+    var maxIterations = 5000;
+    var canvasWidth, canvasHeight;
+    
+    class Node {
+      constructor(x, y, parent) {
+        this.x = x;
+        this.y = y;
+        this.parent = parent || null;
+      }
+    }
+
+    function setup() {
+      var container = document.getElementById('canvas-container');
+      canvasWidth = min(windowWidth - 40, 600);
+      canvasHeight = min(windowHeight - 300, 500);
+      
+      var canvas = createCanvas(canvasWidth, canvasHeight);
+      canvas.parent('canvas-container');
+      cols = floor(width / cellSize);
+      rows = floor(height / cellSize);
+      frameRate(30);
+      noLoop();
+    }
+
+    function windowResized() {
+      canvasWidth = min(windowWidth - 40, 600);
+      canvasHeight = min(windowHeight - 300, 500);
+      resizeCanvas(canvasWidth, canvasHeight);
+      cols = floor(width / cellSize);
+      rows = floor(height / cellSize);
+      if (maze.length > 0) {
+        generateAndSolve();
+      }
+    }
+
+    function draw() {
+      background(240);
+      
+      if (maze.length > 0) {
+        drawMaze();
+        drawTree();
+        drawPath();
+        
+        if (!foundPath && tree.length > 0 && tree.length < maxIterations) {
+          for (var i = 0; i < 5; i++) {
+            rrtStep();
+          }
+        }
+      }
+    }
+
+    function generateAndSolve() {
+      document.getElementById('status').textContent = 'Generating maze and finding path...';
+      generateMaze();
+      loop();
+    }
+
+    function generateMaze() {
+      maze = [];
+      for (var i = 0; i < rows; i++) {
+        maze[i] = [];
+        for (var j = 0; j < cols; j++) {
+          maze[i][j] = random() < 0.3 ? 1 : 0;
+        }
+      }
+      
+      start = { x: 1, y: 1 };
+      goal = { x: cols - 2, y: rows - 2 };
+      maze[start.y][start.x] = 0;
+      maze[goal.y][goal.x] = 0;
+      
+      tree = [new Node(start.x, start.y)];
+      path = [];
+      foundPath = false;
+    }
+
+    function drawMaze() {
+      for (var i = 0; i < rows; i++) {
+        for (var j = 0; j < cols; j++) {
+          if (maze[i][j] === 1) {
+            fill(40);
+            noStroke();
+            rect(j * cellSize, i * cellSize, cellSize, cellSize);
+          }
+        }
+      }
+      
+      fill(100, 200, 100);
+      circle(start.x * cellSize + cellSize/2, start.y * cellSize + cellSize/2, cellSize * 0.6);
+      
+      fill(200, 100, 100);
+      circle(goal.x * cellSize + cellSize/2, goal.y * cellSize + cellSize/2, cellSize * 0.6);
+    }
+
+    function drawTree() {
+      stroke(150, 150, 255, 100);
+      strokeWeight(1);
+      for (var i = 0; i < tree.length; i++) {
+        var node = tree[i];
+        if (node.parent) {
+          line(
+            node.x * cellSize + cellSize/2,
+            node.y * cellSize + cellSize/2,
+            node.parent.x * cellSize + cellSize/2,
+            node.parent.y * cellSize + cellSize/2
+          );
+        }
+      }
+    }
+
+    function drawPath() {
+      if (path.length > 1) {
+        stroke(255, 100, 100);
+        strokeWeight(3);
+        noFill();
+        beginShape();
+        for (var i = 0; i < path.length; i++) {
+          vertex(path[i].x * cellSize + cellSize/2, path[i].y * cellSize + cellSize/2);
+        }
+        endShape();
+      }
+    }
+
+    function rrtStep() {
+      if (foundPath) return;
+      
+      var randomPoint = {
+        x: floor(random(cols)),
+        y: floor(random(rows))
+      };
+      
+      if (random() < 0.1) {
+        randomPoint = { x: goal.x, y: goal.y };
+      }
+      
+      var nearest = findNearest(randomPoint);
+      var newNode = steer(nearest, randomPoint);
+      
+      if (newNode && !collisionCheck(nearest, newNode)) {
+        tree.push(newNode);
+        
+        var distToGoal = dist(newNode.x, newNode.y, goal.x, goal.y);
+        if (distToGoal < 2) {
+          foundPath = true;
+          constructPath(newNode);
+          document.getElementById('status').textContent = 'Path found!';
+        }
+      }
+      
+      if (tree.length >= maxIterations) {
+        document.getElementById('status').textContent = 'Max iterations reached. No path found.';
+        foundPath = true;
+      }
+    }
+
+    function findNearest(point) {
+      var minDist = Infinity;
+      var nearest = tree[0];
+      
+      for (var i = 0; i < tree.length; i++) {
+        var d = dist(tree[i].x, tree[i].y, point.x, point.y);
+        if (d < minDist) {
+          minDist = d;
+          nearest = tree[i];
+        }
+      }
+      return nearest;
+    }
+
+    function steer(from, to) {
+      var maxStep = 1;
+      var dx = to.x - from.x;
+      var dy = to.y - from.y;
+      var distance = sqrt(dx * dx + dy * dy);
+      
+      if (distance === 0) return null;
+      
+      var stepX = round((dx / distance) * min(maxStep, distance));
+      var stepY = round((dy / distance) * min(maxStep, distance));
+      
+      var newX = from.x + stepX;
+      var newY = from.y + stepY;
+      
+      if (newX >= 0 && newX < cols && newY >= 0 && newY < rows) {
+        return new Node(newX, newY, from);
+      }
+      return null;
+    }
+
+    function collisionCheck(from, to) {
+      if (maze[to.y][to.x] === 1) return true;
+      
+      var steps = max(abs(to.x - from.x), abs(to.y - from.y));
+      for (var i = 0; i <= steps; i++) {
+        var t = steps === 0 ? 0 : i / steps;
+        var x = round(from.x + (to.x - from.x) * t);
+        var y = round(from.y + (to.y - from.y) * t);
+        if (maze[y][x] === 1) return true;
+      }
+      return false;
+    }
+
+    function constructPath(endNode) {
+      path = [];
+      var current = endNode;
+      while (current) {
+        path.unshift(current);
+        current = current.parent;
+      }
+    }
+  </script>
+</body>
+</html>
