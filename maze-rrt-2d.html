@@ -102,11 +102,16 @@
     // - parent: reference to the parent Node from which this node was expanded
     // The `parent` reference is used to reconstruct a path from any node
     // back to the start by following parent links (used in `constructPath`).
+    // RRT Node now includes:
+    // - cost: cost-to-come from the root (start)
+    // - children: list of child nodes (used for efficient cost propagation when rewiring)
     class Node {
       constructor(x, y, parent) {
         this.x = x;
         this.y = y;
         this.parent = parent || null;
+        this.cost = Infinity; // will be set when node is attached to the tree
+        this.children = [];
       }
     }
 
@@ -130,6 +135,39 @@
         root.right = kdInsert(root.right, rrtNode, depth + 1);
       }
       return root;
+    }
+
+    // Collect all RRT Nodes within squared radius `r2` of `point` using the k-d tree.
+    // Returns an array of Node references.
+    function kdRadiusSearch(root, point, r2) {
+      var results = [];
+      if (!root) return results;
+
+      function sqDist(a, b) {
+        var dx = a.x - b.x;
+        var dy = a.y - b.y;
+        return dx * dx + dy * dy;
+      }
+
+      function recurse(curr) {
+        if (!curr) return;
+        var d = sqDist(curr.node, point);
+        if (d <= r2) results.push(curr.node);
+
+        var axis = curr.axis;
+        var diff = (axis === 0) ? (point.x - curr.node.x) : (point.y - curr.node.y);
+
+        if (diff < 0) {
+          recurse(curr.left);
+          if (diff * diff <= r2) recurse(curr.right);
+        } else {
+          recurse(curr.right);
+          if (diff * diff <= r2) recurse(curr.left);
+        }
+      }
+
+      recurse(root);
+      return results;
     }
 
     // Wrapper that returns the nearest RRT Node in the k-d tree to `point`.
@@ -246,6 +284,11 @@
 
     // Create a random grid-based maze (0 = free, 1 = wall), pick start/goal,
     // and reset the RRT tree and path state.
+    // neighbor radius used by RRT* (in grid units). You can tune this value
+    // or compute it adaptively based on node count and area for theoretical
+    // asymptotic guarantees. This fixed value works well for small mazes.
+    var RRTSTAR_NEIGHBOR_RADIUS = 10;
+
     function generateMaze() {
       maze = [];
       for (var i = 0; i < rows; i++) {
@@ -261,6 +304,9 @@
       maze[goal.y][goal.x] = 0;
       
       tree = [new Node(start.x, start.y)];
+      // set cost and children for the start node
+      tree[0].cost = 0;
+      tree[0].children = [];
       // initialize k-d tree with a balanced build from the current tree
       kdInsertsSinceRebuild = 0;
       rebuildKD();
@@ -323,6 +369,20 @@
     // Perform one RRT iteration: sample a point, find the nearest tree node,
     // attempt to steer from that node toward the sample, do collision checks,
     // add the new node to the tree, and check if the goal is reached.
+    // Update cost for node and its descendants using children links.
+    function updateCostsFrom(node) {
+      var stack = [node];
+      while (stack.length > 0) {
+        var cur = stack.pop();
+        if (cur.parent) {
+          cur.cost = dist(cur.x, cur.y, cur.parent.x, cur.parent.y) + cur.parent.cost;
+        }
+        for (var i = 0; i < cur.children.length; i++) stack.push(cur.children[i]);
+      }
+    }
+
+    // One RRT* iteration: sample a point, find nearest, steer, choose best
+    // parent among nearby nodes, insert, and rewire neighbors where beneficial.
     function rrtStep() {
       if (foundPath) return;
       
@@ -336,23 +396,91 @@
       }
       
       var nearest = findNearest(randomPoint);
-      var newNode = steer(nearest, randomPoint);
-      
-      if (newNode && !collisionCheck(nearest, newNode)) {
-        tree.push(newNode);
-        // also insert the new node into the k-d tree for faster NN queries
-        kdRoot = kdInsert(kdRoot, newNode, 0);
-        kdInsertsSinceRebuild++;
+      var tentative = steer(nearest, randomPoint);
+
+      if (tentative) {
+        // don't attempt to insert into a wall cell
+        if (maze[tentative.y] && maze[tentative.y][tentative.x] === 1) {
+          tentative = null;
+        }
+      }
+
+      if (tentative) {
+        // Find neighbors within a radius for RRT* consideration
+        var r = RRTSTAR_NEIGHBOR_RADIUS;
+        var neighbors = kdRadiusSearch(kdRoot, tentative, r * r);
+
+        // Build candidate parent list: include nearest and neighbors (avoid duplicates)
+        var candidates = [];
+        var seen = new Set();
+        function pushIfNew(n) {
+          if (!n) return;
+          var id = n.x + ',' + n.y;
+          if (!seen.has(id)) { seen.add(id); candidates.push(n); }
+        }
+        pushIfNew(nearest);
+        for (var i = 0; i < neighbors.length; i++) pushIfNew(neighbors[i]);
+
+        // Choose the best parent among candidates minimizing cost and collision-free
+        var bestParent = null;
+        var bestCost = Infinity;
+        for (var i = 0; i < candidates.length; i++) {
+          var n = candidates[i];
+          // check collision between candidate parent and tentative
+          if (collisionCheck(n, tentative)) continue;
+          var c = n.cost + dist(n.x, n.y, tentative.x, tentative.y);
+          if (c < bestCost) {
+            bestCost = c;
+            bestParent = n;
+          }
+        }
+
+        // If no collision-free parent found, skip this sample
+        if (!bestParent) {
+          tentative = null;
+        }
+
+        if (tentative) {
+          // attach tentative to bestParent
+          tentative.parent = bestParent;
+          tentative.cost = bestCost;
+          tentative.children = [];
+          // add to tree and kd-tree
+          tree.push(tentative);
+          kdRoot = kdInsert(kdRoot, tentative, 0);
+          kdInsertsSinceRebuild++;
+          // update children links
+          bestParent.children.push(tentative);
+
+          // rewire neighbors: if going through tentative reduces cost, and collision free, rewire
+          for (var j = 0; j < neighbors.length; j++) {
+            var nb = neighbors[j];
+            if (nb === bestParent) continue;
+            var newCost = tentative.cost + dist(tentative.x, tentative.y, nb.x, nb.y);
+            if (newCost + 1e-9 < nb.cost && !collisionCheck(tentative, nb)) {
+              // remove nb from its old parent's children
+              if (nb.parent) {
+                var idx = nb.parent.children.indexOf(nb);
+                if (idx >= 0) nb.parent.children.splice(idx, 1);
+              }
+              nb.parent = tentative;
+              tentative.children.push(nb);
+              // update nb and its descendants' costs
+              updateCostsFrom(nb);
+            }
+          }
+        }
+
         // Periodically rebuild the kd-tree into a balanced structure to
         // avoid long-term degeneration from many incremental inserts.
         if (kdInsertsSinceRebuild >= KD_REBUILD_INTERVAL) {
           rebuildKD();
         }
-        
-        var distToGoal = dist(newNode.x, newNode.y, goal.x, goal.y);
+
+        var distToGoal = dist(tentative.x, tentative.y, goal.x, goal.y);
         if (distToGoal < 2) {
           foundPath = true;
-          constructPath(newNode);
+          constructPath(tentative);
           document.getElementById('status').textContent = 'Path found!';
         }
       }
