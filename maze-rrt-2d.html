@@ -106,6 +106,118 @@
     var isPanning = false;
     var panStartX = 0;
     var panStartY = 0;
+
+    // Encapsulate k-d tree behavior in a readable class. This keeps the
+    // implementation identical but groups state and operations.
+    class KDTree {
+      constructor(rebuildInterval) {
+        this.root = null;
+        this.insertsSinceRebuild = 0;
+        this.interval = rebuildInterval || KD_REBUILD_INTERVAL;
+      }
+
+      // insert an RRT Node and update counter
+      insert(rrtNode) {
+        this.root = this._insert(this.root, rrtNode, 0);
+        this.insertsSinceRebuild++;
+      }
+
+      // nearest neighbor wrapper
+      nearest(point) {
+        return this._nearestSearch(this.root, point);
+      }
+
+      // radius search wrapper
+      radiusSearch(point, r2) {
+        return this._radiusSearch(this.root, point, r2);
+      }
+
+      // rebuild tree from array of nodes
+      rebuildFromArray(nodes) {
+        this.root = buildKDFromArray(nodes, 0);
+        this.insertsSinceRebuild = 0;
+      }
+
+      reset() {
+        this.root = null;
+        this.insertsSinceRebuild = 0;
+      }
+
+      // internal recursive insert (same logic as kdInsert)
+      _insert(root, rrtNode, depth) {
+        if (!root) return new KDNode(rrtNode, depth % 2);
+        var axis = root.axis;
+        if ((axis === 0 && rrtNode.x < root.node.x) || (axis === 1 && rrtNode.y < root.node.y)) {
+          root.left = this._insert(root.left, rrtNode, depth + 1);
+        } else {
+          root.right = this._insert(root.right, rrtNode, depth + 1);
+        }
+        return root;
+      }
+
+      // internal nearest search (adapted from kdNearestSearch)
+      _nearestSearch(root, point) {
+        if (!root) return null;
+        var best = { node: null, dist: Infinity };
+
+        function sqDist(a, b) {
+          var dx = a.x - b.x;
+          var dy = a.y - b.y;
+          return dx * dx + dy * dy;
+        }
+
+        function recurse(curr) {
+          if (!curr) return;
+          var d = sqDist(curr.node, point);
+          if (d < best.dist) {
+            best.node = curr.node;
+            best.dist = d;
+          }
+          var axis = curr.axis;
+          var diff = (axis === 0) ? (point.x - curr.node.x) : (point.y - curr.node.y);
+          var first = diff < 0 ? curr.left : curr.right;
+          var second = diff < 0 ? curr.right : curr.left;
+          recurse(first);
+          if (diff * diff < best.dist) recurse(second);
+        }
+
+        recurse(root);
+        return best.node;
+      }
+
+      // internal radius search (adapted from kdRadiusSearch)
+      _radiusSearch(root, point, r2) {
+        var results = [];
+        if (!root) return results;
+
+        function sqDist(a, b) {
+          var dx = a.x - b.x;
+          var dy = a.y - b.y;
+          return dx * dx + dy * dy;
+        }
+
+        function recurse(curr) {
+          if (!curr) return;
+          var d = sqDist(curr.node, point);
+          if (d <= r2) results.push(curr.node);
+          var axis = curr.axis;
+          var diff = (axis === 0) ? (point.x - curr.node.x) : (point.y - curr.node.y);
+          if (diff < 0) {
+            recurse(curr.left);
+            if (diff * diff <= r2) recurse(curr.right);
+          } else {
+            recurse(curr.right);
+            if (diff * diff <= r2) recurse(curr.left);
+          }
+        }
+
+        recurse(root);
+        return results;
+      }
+    }
+
+    // create a single KDTree instance used by the planner
+    var kdTree = new KDTree(KD_REBUILD_INTERVAL);
     
     // Node: represents a single vertex in the RRT tree.
     // - x, y: grid coordinates of the node (integers)
@@ -326,8 +438,8 @@
       tree[0].cost = 0;
       tree[0].children = [];
       // initialize k-d tree with a balanced build from the current tree
-      kdInsertsSinceRebuild = 0;
-      rebuildKD();
+      kdTree.reset();
+      kdTree.rebuildFromArray(tree.slice());
       path = [];
       foundPath = false;
     }
@@ -474,7 +586,7 @@
       if (tentative) {
         // Find neighbors within a radius for RRT* consideration
         var r = RRTSTAR_NEIGHBOR_RADIUS;
-        var neighbors = kdRadiusSearch(kdRoot, tentative, r * r);
+        var neighbors = kdTree.radiusSearch(tentative, r * r);
 
         // Build candidate parent list: include nearest and neighbors (avoid duplicates)
         var candidates = [];
@@ -513,8 +625,7 @@
           tentative.children = [];
           // add to tree and kd-tree
           tree.push(tentative);
-          kdRoot = kdInsert(kdRoot, tentative, 0);
-          kdInsertsSinceRebuild++;
+          kdTree.insert(tentative);
           // update children links
           bestParent.children.push(tentative);
 
@@ -539,8 +650,8 @@
 
         // Periodically rebuild the kd-tree into a balanced structure to
         // avoid long-term degeneration from many incremental inserts.
-        if (kdInsertsSinceRebuild >= KD_REBUILD_INTERVAL) {
-          rebuildKD();
+        if (kdTree.insertsSinceRebuild >= kdTree.interval) {
+          kdTree.rebuildFromArray(tree.slice());
         }
 
         var distToGoal = dist(tentative.x, tentative.y, goal.x, goal.y);
@@ -562,10 +673,8 @@
     // If the k-d tree is missing or its search fails we fall back to the
     // original brute-force linear scan over `tree` (guaranteed to return a node).
     function findNearest(point) {
-      if (kdRoot) {
-        var nearest = kdNearestSearch(kdRoot, point);
-        if (nearest) return nearest;
-      }
+      var nearest = kdTree.nearest(point);
+      if (nearest) return nearest;
 
       // Brute-force fallback: scan all nodes in `tree` and pick the closest.
       var minDist = Infinity;
